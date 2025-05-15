@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商品库存管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .clickable-row {
+            cursor: pointer;
+        }
+        .clickable-row:hover {
+            background-color: rgba(0,0,0,.075) !important;
+        }
+        .loading-spinner {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 9999;
+        }
+        .loading-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+        .loading-text {
+            margin-top: 10px;
+            color: #0d6efd;
+        }
+        .table-loading {
+            position: relative;
+            min-height: 200px;
+        }
+        .table-loading::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1 class="mb-4">商品库存管理</h1>
+        
+        <!-- 搜索栏 -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="text" id="searchInput" class="form-control" placeholder="搜索商品名称...">
+                    <button class="btn btn-primary" onclick="searchGoods()">搜索</button>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="input-group">
+                    <input type="number" id="goodIdInput" class="form-control" placeholder="输入商品ID...">
+                    <button class="btn btn-info" onclick="searchById()">查询库存</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ID查询结果弹窗 -->
+        <div class="modal fade" id="stockModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header bg-info text-white">
+                        <h5 class="modal-title">商品详细信息</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body" id="stockInfo">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 商品列表 -->
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr></tr>
+                        <th>ID</th>
+                        <th>名称</th>
+                        <th>价格</th>
+                        <th>总库存</th>
+                        <th>已预订</th>
+                        <th>可用库存</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="goodsList">
+                </tbody>
+            </table>
+        </div>
+
+        <!-- 分页 -->
+        <nav aria-label="Page navigation">
+            <ul class="pagination justify-content-center" id="pagination">
+            </ul>
+        </nav>
+
+        <!-- 预订模态框 -->
+        <div class="modal fade" id="reserveModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">预订商品</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="hidden" id="goodId">
+                        <div class="mb-3">
+                            <label class="form-label">预订数量:</label>
+                            <input type="number" class="form-control" id="reserveCount" min="1">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                        <button type="button" class="btn btn-primary" onclick="confirmReserve()">确认预订</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局加载动画 -->
+    <div class="loading-spinner" id="loadingSpinner">
+        <div class="loading-content">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">加载中...</span>
+            </div>
+            <div class="loading-text">加载中...</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let currentPage = 1;
+        let reserveModal;
+        let stockModal;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            reserveModal = new bootstrap.Modal(document.getElementById('reserveModal'));
+            stockModal = new bootstrap.Modal(document.getElementById('stockModal'));
+            loadGoods();
+        });
+
+        function showLoading() {
+            document.getElementById('loadingSpinner').style.display = 'block';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingSpinner').style.display = 'none';
+        }
+
+        function loadGoods(page = 1, search = '') {
+            currentPage = page;
+            const tableContainer = document.querySelector('.table-responsive');
+            tableContainer.classList.add('table-loading');
+            
+            fetch(`/api/good/?page=${page}&name=${search}`)
+                .then(response => response.json())
+                .then(data => {
+                    renderGoods(data.results);
+                    renderPagination(data);
+                })
+                .finally(() => {
+                    tableContainer.classList.remove('table-loading');
+                });
+        }
+
+        function renderGoods(goods) {
+            const tbody = document.getElementById('goodsList');
+            tbody.innerHTML = '';
+            
+            goods.forEach(good => {
+                const availableStock = good.stock - good.reserved;
+                tbody.innerHTML += `
+                    <tr class="clickable-row" onclick="searchById(${good.id})">
+                        <td>${good.id}</td>
+                        <td>${good.name}</td>
+                        <td>￥${good.price}</td>
+                        <td>${good.stock}</td>
+                        <td>${good.reserved}</td>
+                        <td>${availableStock}</td>
+                        <td>
+                            <button class="btn btn-sm btn-primary" 
+                                    onclick="event.stopPropagation(); showReserveModal(${good.id})"
+                                    ${availableStock <= 0 ? 'disabled' : ''}>
+                                预订
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        function renderPagination(data) {
+            const pagination = document.getElementById('pagination');
+            const totalPages = Math.ceil(data.count / 10);
+            
+            let html = '';
+            for (let i = 1; i <= totalPages; i++) {
+                html += `
+                    <li class="page-item ${i === currentPage ? 'active' : ''}">
+                        <a class="page-link" href="#" onclick="loadGoods(${i})">${i}</a>
+                    </li>
+                `;
+            }
+            pagination.innerHTML = html;
+        }
+
+        function searchGoods() {
+            const searchTerm = document.getElementById('searchInput').value;
+            loadGoods(1, searchTerm);
+        }
+
+        function searchById(goodId) {
+            if (!goodId) {
+                const inputId = document.getElementById('goodIdInput').value;
+                if (!inputId) {
+                    alert('请输入商品ID');
+                    return;
+                }
+                goodId = inputId;
+            }
+
+            showLoading();
+            fetch(`/api/good/${goodId}/`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('商品不存在');
+                    }
+                    return response.json();
+                })
+                .then(good => {
+                    const availableStock = good.stock - good.reserved;
+                    const stockStatus = availableStock > 0 
+                        ? '<span class="badge bg-success">库存充足</span>' 
+                        : '<span class="badge bg-danger">库存不足</span>';
+                    
+                    document.getElementById('stockInfo').innerHTML = `
+                        <div class="card border-info">
+                            <div class="card-header bg-light">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <h5 class="card-title mb-0">${good.name}</h5>
+                                    ${stockStatus}
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <h6 class="text-muted mb-3">库存信息</h6>
+                                        <ul class="list-unstyled">
+                                            <li class="mb-2"><i class="bi bi-box"></i> <strong>总库存：</strong>${good.stock}</li>
+                                            <li class="mb-2"><i class="bi bi-bookmark"></i> <strong>已预订：</strong>${good.reserved}</li>
+                                            <li class="mb-2"><i class="bi bi-check-circle"></i> <strong>可用库存：</strong>${availableStock}</li>
+                                        </ul>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <h6 class="text-muted mb-3">商品信息</h6>
+                                        <ul class="list-unstyled">
+                                            <li class="mb-2"><i class="bi bi-tag"></i> <strong>商品ID：</strong>${good.id}</li>
+                                            <li class="mb-2"><i class="bi bi-currency-yen"></i> <strong>价格：</strong>￥${good.price}</li>
+                                            <li class="mb-2"><i class="bi bi-clock"></i> <strong>创建时间：</strong>${new Date(good.created_at).toLocaleString()}</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                                ${good.description ? `
+                                <div class="mt-3">
+                                    <h6 class="text-muted">商品描述</h6>
+                                    <p class="card-text border-top pt-2">${good.description || '暂无描述'}</p>
+                                </div>
+                                ` : ''}
+                            </div>
+                            <div class="card-footer bg-light">
+                                <button class="btn btn-primary btn-sm" 
+                                    onclick="showReserveModal(${good.id})"
+                                    ${availableStock <= 0 ? 'disabled' : ''}>
+                                    立即预订
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    stockModal.show();
+                })
+                .catch(error => {
+                    alert(error.message);
+                })
+                .finally(() => {
+                    hideLoading();
+                });
+        }
+
+        function showReserveModal(goodId) {
+            document.getElementById('goodId').value = goodId;
+            document.getElementById('reserveCount').value = '1';
+            reserveModal.show();
+        }
+
+        function confirmReserve() {
+            const goodId = document.getElementById('goodId').value;
+            const count = parseInt(document.getElementById('reserveCount').value);
+
+            showLoading();
+            fetch(`/api/good/${goodId}/reserve/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ count: count })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw response;
+                }
+                return response.text();
+            })
+            .then(message => {
+                alert(message);
+                reserveModal.hide();
+                loadGoods(currentPage);
+            })
+            .catch(async (error) => {
+                const errorMsg = await error.text();
+                alert(errorMsg);
+            })
+            .finally(() => {
+                hideLoading();
+            });
+        }
+    </script>
+</body>
+</html>
